@@ -4,8 +4,6 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -14,8 +12,13 @@ permissions:
   id-token: write
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,58 +35,53 @@ jobs:
       - name: Generate Gradle Wrapper
         run: gradle wrapper --gradle-version 8.4
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      - name: Create stable signing keystore
+        run: |
+          keytool -genkey -v \
+            -keystore ${{ github.workspace }}/streamvault.p12 \
+            -storetype pkcs12 \
+            -alias streamvault \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass streamvault123 \
+            -dname "CN=StreamVault, O=Sidscri, L=Plano, ST=Texas, C=US"
+
+      - name: Add signing config to build
+        run: |
+          cat > app/signing.gradle << 'EOF'
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file("$rootDir/streamvault.p12")
+                      storePassword "streamvault123"
+                      keyAlias "streamvault"
+                      keyPassword "streamvault123"
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          EOF
+          echo 'apply from: "signing.gradle"' >> app/build.gradle
 
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: StreamVault-debug
-          path: app/build/outputs/apk/debug/*.apk
+      - name: Verify APK is signed
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "APK: $APK"
+          apksigner verify --print-certs "$APK" && echo "APK is properly signed" || echo "ERROR: APK is NOT signed"
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: StreamVault-release
           path: app/build/outputs/apk/release/*.apk
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - name: Download APKs
-        uses: actions/download-artifact@v4
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            StreamVault-debug/*.apk
-            StreamVault-release/*.apk
-          generate_release_notes: true
-
-  deploy-fdroid-repo:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download Release APK
-        uses: actions/download-artifact@v4
-        with:
-          name: StreamVault-debug
-          path: apk-output
 
       - name: Install fdroidserver
         run: |
@@ -93,58 +91,44 @@ jobs:
       - name: Build F-Droid repo
         run: |
           mkdir -p fdroid-workdir/repo
-          cp apk-output/*.apk fdroid-workdir/repo/
+          cp app/build/outputs/apk/release/*.apk fdroid-workdir/repo/
+          cp ${{ github.workspace }}/streamvault.p12 fdroid-workdir/keystore.p12
           cd fdroid-workdir
 
-          # Generate a signing keystore for the repo index
-          keytool -genkey -v \
-            -keystore keystore.p12 \
-            -storetype pkcs12 \
-            -alias repokey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass repopass \
-            -dname "CN=StreamVault Repo, O=StreamVault, L=Unknown, ST=Unknown, C=US"
-
-          # Create proper fdroid config
           cat > config.yml << 'EOF'
           repo_url: https://sidscri.github.io/StreamVault/fdroid/repo
           repo_name: StreamVault F-Droid Repo
           repo_description: Personal F-Droid repository for StreamVault media player
           archive_older: 0
-          repo_keyalias: repokey
+          repo_keyalias: streamvault
           keystore: keystore.p12
-          keystorepass: repopass
-          keypass: repopass
-          keydname: CN=StreamVault Repo, O=StreamVault, L=Unknown, ST=Unknown, C=US
+          keystorepass: streamvault123
+          keypass: streamvault123
+          keydname: CN=StreamVault, O=Sidscri, L=Plano, ST=Texas, C=US
           EOF
 
           sed -i 's/^[[:space:]]*//' config.yml
 
           echo "=== config.yml ==="
           cat config.yml
-
-          # Generate the repo index
-          fdroid update --create-metadata --allow-disabled-algorithms -v
-
-          echo "=== Repo contents after fdroid update ==="
+          echo ""
+          echo "=== APKs ==="
           ls -la repo/
+
+          fdroid update --create-metadata -v
+
+          echo ""
+          echo "=== Repo contents ==="
+          ls -la repo/
+          echo ""
+          echo "=== Checking index files ==="
+          test -f repo/index-v1.jar && echo "index-v1.jar EXISTS" || echo "index-v1.jar MISSING"
+          test -f repo/entry.jar && echo "entry.jar EXISTS" || echo "entry.jar MISSING"
 
       - name: Assemble Pages site
         run: |
-          OWNER="${{ github.repository_owner }}"
-          REPO="${{ github.event.repository.name }}"
-          REPO_URL="https://${OWNER}.github.io/${REPO}/fdroid/repo"
-
           mkdir -p _site/fdroid
           cp -r fdroid-workdir/repo _site/fdroid/
-
-          # Verify critical F-Droid index files exist
-          echo "=== Checking for F-Droid index files ==="
-          ls -la _site/fdroid/repo/index-v1.jar || echo "WARNING: index-v1.jar missing!"
-          ls -la _site/fdroid/repo/index-v2.json || echo "WARNING: index-v2.json missing (OK for older F-Droid)"
-          ls -la _site/fdroid/repo/entry.jar || echo "WARNING: entry.jar missing"
 
           find _site/fdroid/repo -name "*.apk" -exec cp {} _site/fdroid/repo/StreamVault.apk \; 2>/dev/null || true
 
@@ -210,7 +194,7 @@ jobs:
           </html>
           HTMLEOF
 
-          echo "=== Final site structure ==="
+          echo "=== Final site ==="
           find _site -type f
 
       - name: Setup Pages
@@ -224,3 +208,19 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  release:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: StreamVault-release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.apk"
+          generate_release_notes: true
