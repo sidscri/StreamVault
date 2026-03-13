@@ -1,1 +1,211 @@
-Start-Process "https://github.com/sidscri/StreamVault/tree/main/.github/workflows"
+name: Build, Release & F-Droid Repo
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version 8.4
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StreamVault-debug
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StreamVault-release
+          path: app/build/outputs/apk/release/*.apk
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download APKs
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            StreamVault-debug/*.apk
+            StreamVault-release/*.apk
+          generate_release_notes: true
+
+  deploy-fdroid-repo:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Release APK
+        uses: actions/download-artifact@v4
+        with:
+          name: StreamVault-release
+          path: apk-output
+
+      - name: List downloaded APKs
+        run: |
+          echo "=== Downloaded APKs ==="
+          find apk-output -name "*.apk" -ls
+
+      - name: Install fdroidserver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fdroidserver apksigner
+
+      - name: Build F-Droid repo
+        run: |
+          mkdir -p fdroid-workdir/repo
+          cp apk-output/*.apk fdroid-workdir/repo/
+
+          cat > fdroid-workdir/config.yml << 'ENDCONFIG'
+          repo_url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/fdroid/repo
+          repo_name: StreamVault F-Droid Repo
+          repo_description: Personal F-Droid repository for StreamVault
+          archive_older: 3
+          ENDCONFIG
+
+          sed -i 's/^[[:space:]]*//' fdroid-workdir/config.yml
+
+          echo "=== config.yml ==="
+          cat fdroid-workdir/config.yml
+          echo "=== APKs in repo ==="
+          ls -la fdroid-workdir/repo/
+
+          cd fdroid-workdir
+          fdroid update --create-metadata --allow-disabled-algorithms -v 2>&1 || {
+            echo "fdroid update had issues — continuing with direct APK hosting"
+          }
+
+          echo "=== Generated repo contents ==="
+          ls -laR repo/
+
+      - name: Assemble Pages site
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+          REPO_URL="https://${OWNER}.github.io/${REPO}/fdroid/repo"
+
+          mkdir -p _site/fdroid
+          cp -r fdroid-workdir/repo _site/fdroid/
+
+          find _site/fdroid/repo -name "*.apk" -exec cp {} _site/fdroid/repo/StreamVault.apk \; 2>/dev/null || true
+
+          echo "=== _site contents ==="
+          find _site -type f | head -50
+
+          cat > _site/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <title>StreamVault F-Droid Repo</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+          *{margin:0;padding:0;box-sizing:border-box}
+          body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;display:flex;justify-content:center;padding:40px 16px}
+          .card{max-width:560px;width:100%}
+          .hero{background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:20px;padding:36px 28px;margin-bottom:16px;border:1px solid rgba(108,92,231,0.2)}
+          h1{font-size:28px;color:#6c5ce7;margin-bottom:4px}
+          .sub{color:#8a879a;font-size:14px;margin-bottom:24px}
+          .repo-url{background:#0f0f1a;padding:14px 16px;border-radius:10px;font-family:monospace;font-size:13px;word-break:break-all;color:#b8aeff;border:1px solid rgba(108,92,231,0.15);margin-bottom:20px;cursor:pointer;position:relative}
+          .repo-url:hover{border-color:#6c5ce7}
+          .copy-hint{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:11px;color:#55526a;font-family:sans-serif}
+          .section{background:#12121a;border-radius:16px;padding:24px;margin-bottom:16px;border:1px solid rgba(255,255,255,0.05)}
+          .section h2{font-size:16px;margin-bottom:16px;color:#e8e6f0}
+          .steps{list-style:none;counter-reset:s}
+          .steps li{counter-increment:s;padding:10px 0 10px 40px;position:relative;font-size:14px;line-height:1.6;color:#c0bdd0;border-bottom:1px solid rgba(255,255,255,0.04)}
+          .steps li:last-child{border-bottom:none}
+          .steps li::before{content:counter(s);position:absolute;left:0;top:10px;width:26px;height:26px;background:rgba(108,92,231,0.15);color:#6c5ce7;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+          strong{color:#e8e6f0}
+          .dl-btn{display:inline-block;background:#6c5ce7;color:#fff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;margin-top:8px}
+          .dl-btn:hover{opacity:0.9}
+          .footer{text-align:center;margin-top:20px;font-size:12px;color:#55526a}
+          .footer a{color:#6c5ce7;text-decoration:none}
+          .toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(20px);background:#6c5ce7;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;opacity:0;transition:all .3s;pointer-events:none}
+          .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+          </style>
+          </head>
+          <body>
+          <div class="card">
+          <div class="hero">
+          <h1>StreamVault</h1>
+          <p class="sub">Personal F-Droid Repository</p>
+          <div class="repo-url" id="repo-url" onclick="copyUrl()"><span class="copy-hint">tap to copy</span></div>
+          <a class="dl-btn" href="fdroid/repo/StreamVault.apk">Download APK directly</a>
+          </div>
+          <div class="section">
+          <h2>Add this repo to F-Droid</h2>
+          <ol class="steps">
+          <li>Open the <strong>F-Droid</strong> app on your device</li>
+          <li>Go to <strong>Settings → Repositories</strong></li>
+          <li>Tap <strong>+</strong> to add a new repository</li>
+          <li>Paste the repo URL shown above</li>
+          <li>Tap <strong>Add</strong> and pull to refresh</li>
+          </ol>
+          </div>
+          <div class="footer"><a href="https://github.com/${OWNER}/${REPO}">View source on GitHub</a></div>
+          </div>
+          <div class="toast" id="toast">Copied!</div>
+          <script>
+          var u=window.location.href.replace(/\/$/,'') +'/fdroid/repo';
+          document.getElementById('repo-url').insertAdjacentText('afterbegin',u);
+          function copyUrl(){navigator.clipboard.writeText(u).then(function(){var t=document.getElementById('toast');t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)})}
+          </script>
+          </body>
+          </html>
+          HTMLEOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4Start-Process "https://github.com/sidscri/StreamVault/tree/main/.github/workflows"
