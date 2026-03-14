@@ -1,0 +1,16 @@
+StreamVault v3.1.0 (Build 6) — Repository System
+
+• Repository system — add large M3U playlists as browsable stream sources
+  - Multiple repos supported simultaneously
+  - Browse thousands of streams without adding them all to your playlist
+• Region filtering — auto-extracts US:, UK:, CA: prefixes from stream names
+  - Filter pills for quick region switching
+• Genre filtering — filters by group-title categories (News, Sports, Movies, etc)
+• Search across entire repo by name, category, or region
+• Multi-select — tap streams to select, batch-add to playlist
+  - Select All / Clear buttons
+  - Shows which streams are already in your playlist (✓ added)
+• Duplicate detection on import and batch-add
+• Bottom navigation: Library | Repos tabs
+• Variant tag parsing — extracts (S), (F), (H) tags for future failover support
+• All existing features preserved: ExoPlayer, M3U import/export, file picker
