@@ -63,7 +63,11 @@ jobs:
         run: |
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
           echo "APK: $APK"
+<<<<<<< HEAD
           apksigner verify --print-certs "$APK" 2>/dev/null || $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools/ | tail -1)/apksigner verify --print-certs "$APK"
+=======
+          $ANDROID_HOME/build-tools/34.0.0/apksigner verify --print-certs "$APK"
+>>>>>>> 88b007966d3da294976a47d0361d62268169c0e4
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
