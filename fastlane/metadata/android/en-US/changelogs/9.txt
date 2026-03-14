@@ -1,0 +1,29 @@
+StreamVault v4.0.0 (Build 9) — Phase 4: Recording, Settings, Locality, Strength
+
+• Settings page (new tab in bottom nav)
+  - Default startup channel — auto-plays on app launch
+  - Locality priority list — ordered list of your local areas
+  - Failover timeout — configurable buffer timeout (5-60 seconds)
+  - Auto-failover toggle — enable/disable automatic source switching
+• Locality Priorities
+  - Add areas: DFW, Dallas, Ft. Worth, Tyler, Longview, Atlanta, etc.
+  - Reorder with ↑↓ buttons (first = highest priority)
+  - Locality-aware sorting in library, search, repo browser, and failover
+  - Streams matching your top localities appear first everywhere
+• Stream recording
+  - Record button (⏺) in player overlay
+  - Saves to Downloads folder as .ts files
+  - Red indicator when recording active
+  - Auto-stops when exiting player
+• Stream strength indicator
+  - Real-time display in player overlay
+  - Shows: ●●●● Excellent / ●●●○ Good / ●●○○ Fair / ●○○○ Weak
+  - Based on ExoPlayer bandwidth estimate + buffer depth
+  - Shows bitrate (kbps) and buffer seconds
+  - Color-coded: green/orange/red
+  - Updates every 2 seconds
+• Configurable failover
+  - Settings control passed to native player
+  - Buffer timeout respects user setting
+  - Auto-failover toggle respected
+• 4-tab navigation: Library | Guide | Repos | Settings

@@ -1,9 +1,11 @@
 package com.sidscri.streamvault;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -24,6 +26,7 @@ import android.widget.FrameLayout;
 public class MainActivity extends Activity {
 
     private static final int FILE_CHOOSER_REQUEST = 1001;
+    private static final int PERM_REQUEST = 1002;
     private WebView webView;
     private FrameLayout fullscreenContainer;
     private View customView;
@@ -39,6 +42,13 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             getWindow().setStatusBarColor(Color.TRANSPARENT);
             getWindow().setNavigationBarColor(Color.parseColor("#0a0a0f"));
+        }
+
+        // Request storage permission for recording
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERM_REQUEST);
+            }
         }
 
         FrameLayout root = new FrameLayout(this);
@@ -57,23 +67,18 @@ public class MainActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     private void setupWebView() {
         WebSettings s = webView.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
+        s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        s.setAllowFileAccess(true);
-        s.setAllowContentAccess(true);
-        s.setLoadWithOverviewMode(true);
-        s.setUseWideViewPort(true);
+        s.setAllowFileAccess(true); s.setAllowContentAccess(true);
+        s.setLoadWithOverviewMode(true); s.setUseWideViewPort(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setDatabaseEnabled(true);
         s.setJavaScriptCanOpenWindowsAutomatically(true);
-        s.setUserAgentString(s.getUserAgentString() + " StreamVault/3.3");
-        // Allow cross-origin fetch for EPG XML files
+        s.setUserAgentString(s.getUserAgentString() + " StreamVault/4.0");
         s.setAllowUniversalAccessFromFileURLs(true);
 
-        CookieManager cm = CookieManager.getInstance();
-        cm.setAcceptCookie(true);
+        CookieManager cm = CookieManager.getInstance(); cm.setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) cm.setAcceptThirdPartyCookies(webView, true);
 
         webView.addJavascriptInterface(new StreamBridge(), "NativePlayer");
@@ -83,85 +88,63 @@ public class MainActivity extends Activity {
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> cb, FileChooserParams p) {
+            @Override public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> cb, FileChooserParams p) {
                 if (fileUploadCallback != null) fileUploadCallback.onReceiveValue(null);
                 fileUploadCallback = cb;
                 try { startActivityForResult(p.createIntent(), FILE_CHOOSER_REQUEST); }
-                catch (Exception e) {
-                    Intent f = new Intent(Intent.ACTION_GET_CONTENT);
-                    f.setType("*/*"); f.addCategory(Intent.CATEGORY_OPENABLE);
-                    try { startActivityForResult(Intent.createChooser(f, "Choose file"), FILE_CHOOSER_REQUEST); }
-                    catch (Exception ex) { fileUploadCallback = null; return false; }
-                }
+                catch (Exception e) { Intent f = new Intent(Intent.ACTION_GET_CONTENT); f.setType("*/*"); f.addCategory(Intent.CATEGORY_OPENABLE);
+                    try { startActivityForResult(Intent.createChooser(f, "Choose file"), FILE_CHOOSER_REQUEST); } catch (Exception ex) { fileUploadCallback = null; return false; } }
                 return true;
             }
-
             @Override public void onShowCustomView(View v, CustomViewCallback cb) {
                 if (customView != null) { cb.onCustomViewHidden(); return; }
-                customView = v; customViewCallback = cb;
-                fullscreenContainer.addView(customView);
-                fullscreenContainer.setVisibility(View.VISIBLE);
-                webView.setVisibility(View.GONE);
+                customView = v; customViewCallback = cb; fullscreenContainer.addView(customView);
+                fullscreenContainer.setVisibility(View.VISIBLE); webView.setVisibility(View.GONE);
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);
             }
-
             @Override public void onHideCustomView() {
-                if (customView == null) return;
-                fullscreenContainer.removeView(customView);
-                fullscreenContainer.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
-                customViewCallback.onCustomViewHidden();
-                customView = null; customViewCallback = null;
+                if (customView == null) return; fullscreenContainer.removeView(customView);
+                fullscreenContainer.setVisibility(View.GONE); webView.setVisibility(View.VISIBLE);
+                customViewCallback.onCustomViewHidden(); customView = null; customViewCallback = null;
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
             }
         });
-
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
     }
 
     public class StreamBridge {
-        @JavascriptInterface
-        public boolean isAvailable() { return true; }
+        @JavascriptInterface public boolean isAvailable() { return true; }
 
         @JavascriptInterface
         public void play(String url, String title, String category) {
-            runOnUiThread(() -> {
-                Intent i = new Intent(MainActivity.this, PlayerActivity.class);
-                i.putExtra(PlayerActivity.EXTRA_URL, url);
-                i.putExtra(PlayerActivity.EXTRA_TITLE, title);
-                i.putExtra(PlayerActivity.EXTRA_CATEGORY, category);
-                startActivity(i);
-            });
+            runOnUiThread(() -> { Intent i = new Intent(MainActivity.this, PlayerActivity.class);
+                i.putExtra(PlayerActivity.EXTRA_URL, url); i.putExtra(PlayerActivity.EXTRA_TITLE, title);
+                i.putExtra(PlayerActivity.EXTRA_CATEGORY, category); startActivity(i); });
         }
 
         @JavascriptInterface
-        public void playWithFailover(String json, String title, String category) {
-            playWithFailover(json, title, category, "");
+        public void playWithFailover(String json, String title, String cat, String nn) {
+            playWithFailover(json, title, cat, nn, 15, true);
         }
 
         @JavascriptInterface
-        public void playWithFailover(String json, String title, String category, String nowNext) {
-            runOnUiThread(() -> {
-                Intent i = new Intent(MainActivity.this, PlayerActivity.class);
+        public void playWithFailover(String json, String title, String cat, String nn, int foTimeout, boolean foAuto) {
+            runOnUiThread(() -> { Intent i = new Intent(MainActivity.this, PlayerActivity.class);
                 i.putExtra(PlayerActivity.EXTRA_FAILOVER_JSON, json);
                 i.putExtra(PlayerActivity.EXTRA_TITLE, title);
-                i.putExtra(PlayerActivity.EXTRA_CATEGORY, category);
-                i.putExtra(PlayerActivity.EXTRA_NOW_NEXT, nowNext);
-                startActivity(i);
-            });
+                i.putExtra(PlayerActivity.EXTRA_CATEGORY, cat);
+                i.putExtra(PlayerActivity.EXTRA_NOW_NEXT, nn);
+                i.putExtra(PlayerActivity.EXTRA_FO_TIMEOUT, foTimeout);
+                i.putExtra(PlayerActivity.EXTRA_FO_AUTO, foAuto);
+                startActivity(i); });
         }
     }
 
-    @Override
-    protected void onActivityResult(int req, int res, Intent data) {
+    @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == FILE_CHOOSER_REQUEST && fileUploadCallback != null) {
-            Uri[] r = null;
-            if (res == RESULT_OK && data != null && data.getDataString() != null)
-                r = new Uri[]{Uri.parse(data.getDataString())};
-            fileUploadCallback.onReceiveValue(r);
-            fileUploadCallback = null;
+            Uri[] r = null; if (res == RESULT_OK && data != null && data.getDataString() != null) r = new Uri[]{Uri.parse(data.getDataString())};
+            fileUploadCallback.onReceiveValue(r); fileUploadCallback = null;
         }
     }
 
