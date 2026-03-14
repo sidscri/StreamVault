@@ -181,6 +181,17 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void playWithFailover(String failoverJson, String title, String category) {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
+                intent.putExtra(PlayerActivity.EXTRA_FAILOVER_JSON, failoverJson);
+                intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
+                intent.putExtra(PlayerActivity.EXTRA_CATEGORY, category);
+                startActivity(intent);
+            });
+        }
+
+        @JavascriptInterface
         public boolean isAvailable() {
             return true;
         }

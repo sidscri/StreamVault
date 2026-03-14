@@ -1,0 +1,21 @@
+StreamVault v3.2.0 (Build 7) — Smart Failover
+
+• Smart failover — auto-tries alternative streams when playback fails
+  - Matches variants by base name (CNN, CNN (S), CNN (F))
+  - Priority: same region → no tag → (F) → (H) → (A) → (S)
+  - Searches playlist AND all repos for alternatives
+  - Falls back to last successful source when all fail
+  - Toast notifications: "Trying: CNN (S)…", "All alternatives failed"
+• Lock button (🔒) in player — locks to current stream version
+  - Prevents auto-switching during current viewing session
+  - Tap to toggle on/off
+• Network-aware failover
+  - Network loss pauses failover (won't waste attempts)
+  - Auto-retries when network restored
+• Buffering timeout — auto-switches after 15s of buffering
+  - 8s grace period for initial load
+• Compact repo browser filters — dropdowns instead of full pill rows
+  - Region and Genre as compact <select> dropdowns
+  - Much more room for stream list
+• Library shows alternate count badge (e.g. "3 alts")
+• HLS-first with progressive fallback per variant
