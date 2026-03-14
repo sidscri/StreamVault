@@ -29,5 +29,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 4.1.2
-CurrentVersionCode: 13
+CurrentVersion: 4.2.1
+CurrentVersionCode: 15

@@ -112,7 +112,8 @@ public class MainActivity extends Activity {
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
-            // File chooser for import (M3U, JSON, etc.)
+            // File chooser — ALWAYS use custom intent to avoid Android
+            // greying out .m3u files due to unknown MIME type
             @Override
             public boolean onShowFileChooser(WebView webView,
                 ValueCallback<Uri[]> filePathCallback,
@@ -124,21 +125,17 @@ public class MainActivity extends Activity {
                 fileUploadCallback = filePathCallback;
 
                 try {
-                    Intent intent = fileChooserParams.createIntent();
-                    startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+                    // Don't use fileChooserParams.createIntent() — it filters
+                    // by MIME type and greys out .m3u files on many devices
+                    Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                    intent.setType("*/*");
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    // Also try ACTION_OPEN_DOCUMENT as fallback
+                    Intent chooser = Intent.createChooser(intent, "Choose file");
+                    startActivityForResult(chooser, FILE_CHOOSER_REQUEST);
                 } catch (Exception e) {
-                    // Fallback generic file picker
-                    Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
-                    fallback.setType("*/*");
-                    fallback.addCategory(Intent.CATEGORY_OPENABLE);
-                    try {
-                        startActivityForResult(
-                            Intent.createChooser(fallback, "Choose file"),
-                            FILE_CHOOSER_REQUEST);
-                    } catch (Exception ex) {
-                        fileUploadCallback = null;
-                        return false;
-                    }
+                    fileUploadCallback = null;
+                    return false;
                 }
                 return true;
             }

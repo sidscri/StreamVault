@@ -327,7 +327,7 @@ html,body{height:100%;width:100%;font-family:-apple-system,system-ui,sans-serif;
   <div class="iz" id="iz">
     <p>Tap to choose file</p>
     <div class="hn">.json, .m3u, or .m3u8</div>
-    <input type="file" id="imp-f" accept=".m3u,.m3u8,.json,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl,application/json,text/plain,application/octet-stream,*/*">
+    <input type="file" id="imp-f" accept="*/*">
   </div>
   <label>Or paste M3U / JSON content here</label>
   <textarea id="imp-txt" placeholder="#EXTM3U
@@ -349,10 +349,15 @@ http://stream.example.com/cnn
   <h2>Add Repository</h2>
   <label>Name *</label>
   <input id="rp-name" placeholder="My IPTV Provider">
+  <label>M3U URL (fetch from web)</label>
+  <div style="display:flex;gap:4px;margin-bottom:10px">
+    <input id="rp-url" placeholder="https://provider.com/playlist.m3u" style="flex:1;margin-bottom:0">
+    <button class="bs" id="rp-fetch" style="flex-shrink:0;padding:8px 14px;font-size:10px;border-radius:var(--rs)">Fetch</button>
+  </div>
   <div class="iz" id="rp-iz">
-    <p>Choose large .m3u file</p>
-    <div class="hn">.m3u or .m3u8</div>
-    <input type="file" id="rp-f" accept=".m3u,.m3u8,.json,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl,application/json,text/plain,application/octet-stream,*/*">
+    <p>Or choose local .m3u file</p>
+    <div class="hn">Tap to browse</div>
+    <input type="file" id="rp-f" accept="*/*">
   </div>
   <label>Or paste M3U content</label>
   <textarea id="rp-txt" placeholder="#EXTM3U…"></textarea>
@@ -1113,6 +1118,7 @@ function dateStr() { return new Date().toISOString().slice(0, 10); }
 // ═══ REPOSITORIES ═══
 $('fab-repo').onclick = () => {
   $('rp-name').value = '';
+  $('rp-url').value = '';
   $('rp-txt').value = '';
   $('rp-pv').style.display = 'none';
   $('rp-st').style.display = 'none';
@@ -1122,6 +1128,33 @@ $('fab-repo').onclick = () => {
 $('rp-no').onclick = () => $('mo-repo').classList.remove('on');
 $('mo-repo').onclick = e => { if (e.target === $('mo-repo')) $('mo-repo').classList.remove('on'); };
 $('rp-iz').onclick = () => $('rp-f').click();
+
+// Fetch M3U from URL
+$('rp-fetch').onclick = async () => {
+  const url = $('rp-url').value.trim();
+  if (!url) { toast('Enter an M3U URL first'); return; }
+  $('rp-fetch').textContent = 'Fetching…';
+  $('rp-fetch').disabled = true;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    $('rp-txt').value = text;
+    // Auto-set name from URL if empty
+    if (!$('rp-name').value.trim()) {
+      try { $('rp-name').value = new URL(url).hostname.replace('www.', ''); } catch(e) {}
+    }
+    validateRepo(text);
+    toast('Fetched successfully');
+  } catch(e) {
+    toast('Fetch failed: ' + e.message);
+    $('rp-pv').style.display = 'block';
+    $('rp-pv').style.color = 'var(--rd)';
+    $('rp-pv').textContent = '✗ Could not fetch: ' + e.message;
+  }
+  $('rp-fetch').textContent = 'Fetch';
+  $('rp-fetch').disabled = false;
+};
 
 $('rp-f').onchange = (e) => {
   const file = e.target.files[0];
@@ -1161,15 +1194,38 @@ function validateRepo(text) {
 $('rp-ok').onclick = () => {
   const name = $('rp-name').value.trim();
   const text = $('rp-txt').value.trim();
+  const sourceUrl = $('rp-url').value.trim();
   if (!name) { toast('Name is required'); return; }
-  if (!text) { toast('Upload or paste an M3U file'); return; }
+  if (!text) { toast('Fetch a URL, upload, or paste an M3U file'); return; }
   const streams = parseM3U(text).filter(d => d.name && d.url);
   if (!streams.length) { toast('No valid streams found'); return; }
-  repos.push({ id: gid(), name: name, streams: streams, addedAt: Date.now() });
+  repos.push({ id: gid(), name: name, streams: streams, sourceUrl: sourceUrl, addedAt: Date.now() });
   saveRepos();
   $('mo-repo').classList.remove('on');
   renderRepos();
   toast('"' + name + '" added · ' + streams.length + ' streams');
+};
+
+// Refresh a repo from its source URL
+window.refreshRepo = async (id) => {
+  const repo = repos.find(r => r.id === id);
+  if (!repo || !repo.sourceUrl) { toast('No source URL saved for this repo'); return; }
+  toast('Refreshing ' + repo.name + '…');
+  try {
+    const resp = await fetch(repo.sourceUrl);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    const streams = parseM3U(text).filter(d => d.name && d.url);
+    if (!streams.length) throw new Error('No streams in response');
+    const oldCount = repo.streams.length;
+    repo.streams = streams;
+    repo.lastRefresh = Date.now();
+    saveRepos();
+    renderRepos();
+    toast(repo.name + ': ' + streams.length + ' streams (was ' + oldCount + ')');
+  } catch(e) {
+    toast('Refresh failed: ' + e.message);
+  }
 };
 
 function renderRepos() {
@@ -1180,9 +1236,12 @@ function renderRepos() {
   }
   $('repo-lst').innerHTML = repos.map(r => {
     const regs = new Set((r.streams || []).map(s => s.region).filter(Boolean));
+    const urlInfo = r.sourceUrl ? '<div style="font-size:7px;color:var(--t3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🔗 ' + esc(r.sourceUrl).substring(0, 40) + '…</div>' : '';
+    const refreshBtn = r.sourceUrl ? '<button class="rd" onclick="event.stopPropagation();refreshRepo(\'' + r.id + '\')" title="Refresh from URL" style="color:var(--ac)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg></button>' : '';
     return `<div class="rc" onclick="openRepo('${r.id}')">
       <div class="ri2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></div>
-      <div class="rf2"><div class="rn2">${esc(r.name)}</div><div class="rm2">${(r.streams||[]).length} streams · ${regs.size} regions</div></div>
+      <div class="rf2"><div class="rn2">${esc(r.name)}</div><div class="rm2">${(r.streams||[]).length} streams · ${regs.size} regions</div>${urlInfo}</div>
+      ${refreshBtn}
       <button class="rd" onclick="event.stopPropagation();confirmDel('${r.id}','repo')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
     </div>`;
   }).join('');
