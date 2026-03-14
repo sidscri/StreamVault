@@ -35,18 +35,6 @@ jobs:
       - name: Generate Gradle Wrapper
         run: gradle wrapper --gradle-version 8.4
 
-      - name: Create stable signing keystore
-        run: |
-          keytool -genkey -v \
-            -keystore ${{ github.workspace }}/streamvault.p12 \
-            -storetype pkcs12 \
-            -alias streamvault \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass streamvault123 \
-            -dname "CN=StreamVault, O=Sidscri, L=Plano, ST=Texas, C=US"
-
       - name: Add signing config to build
         run: |
           cat > app/signing.gradle << 'EOF'
@@ -75,7 +63,7 @@ jobs:
         run: |
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
           echo "APK: $APK"
-          apksigner verify --print-certs "$APK" && echo "APK is properly signed" || echo "ERROR: APK is NOT signed"
+          apksigner verify --print-certs "$APK"
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
@@ -92,7 +80,7 @@ jobs:
         run: |
           mkdir -p fdroid-workdir/repo
           cp app/build/outputs/apk/release/*.apk fdroid-workdir/repo/
-          cp ${{ github.workspace }}/streamvault.p12 fdroid-workdir/keystore.p12
+          cp streamvault.p12 fdroid-workdir/keystore.p12
           cd fdroid-workdir
 
           cat > config.yml << 'EOF'
@@ -108,20 +96,10 @@ jobs:
           EOF
 
           sed -i 's/^[[:space:]]*//' config.yml
-
-          echo "=== config.yml ==="
-          cat config.yml
-          echo ""
-          echo "=== APKs ==="
-          ls -la repo/
-
           fdroid update --create-metadata -v
 
-          echo ""
           echo "=== Repo contents ==="
           ls -la repo/
-          echo ""
-          echo "=== Checking index files ==="
           test -f repo/index-v1.jar && echo "index-v1.jar EXISTS" || echo "index-v1.jar MISSING"
           test -f repo/entry.jar && echo "entry.jar EXISTS" || echo "entry.jar MISSING"
 
@@ -129,73 +107,22 @@ jobs:
         run: |
           mkdir -p _site/fdroid
           cp -r fdroid-workdir/repo _site/fdroid/
-
           find _site/fdroid/repo -name "*.apk" -exec cp {} _site/fdroid/repo/StreamVault.apk \; 2>/dev/null || true
 
           cat > _site/index.html << 'HTMLEOF'
           <!DOCTYPE html>
           <html lang="en">
           <head>
-          <meta charset="utf-8">
-          <title>StreamVault F-Droid Repo</title>
+          <meta charset="utf-8"><title>StreamVault F-Droid Repo</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <style>
-          *{margin:0;padding:0;box-sizing:border-box}
-          body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;display:flex;justify-content:center;padding:40px 16px}
-          .card{max-width:560px;width:100%}
-          .hero{background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:20px;padding:36px 28px;margin-bottom:16px;border:1px solid rgba(108,92,231,0.2)}
-          h1{font-size:28px;color:#6c5ce7;margin-bottom:4px}
-          .sub{color:#8a879a;font-size:14px;margin-bottom:24px}
-          .repo-url{background:#0f0f1a;padding:14px 16px;border-radius:10px;font-family:monospace;font-size:13px;word-break:break-all;color:#b8aeff;border:1px solid rgba(108,92,231,0.15);margin-bottom:20px;cursor:pointer;position:relative}
-          .repo-url:hover{border-color:#6c5ce7}
-          .copy-hint{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:11px;color:#55526a;font-family:sans-serif}
-          .section{background:#12121a;border-radius:16px;padding:24px;margin-bottom:16px;border:1px solid rgba(255,255,255,0.05)}
-          .section h2{font-size:16px;margin-bottom:16px;color:#e8e6f0}
-          .steps{list-style:none;counter-reset:s}
-          .steps li{counter-increment:s;padding:10px 0 10px 40px;position:relative;font-size:14px;line-height:1.6;color:#c0bdd0;border-bottom:1px solid rgba(255,255,255,0.04)}
-          .steps li:last-child{border-bottom:none}
-          .steps li::before{content:counter(s);position:absolute;left:0;top:10px;width:26px;height:26px;background:rgba(108,92,231,0.15);color:#6c5ce7;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
-          strong{color:#e8e6f0}
-          .dl-btn{display:inline-block;background:#6c5ce7;color:#fff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;margin-top:8px}
-          .dl-btn:hover{opacity:0.9}
-          .footer{text-align:center;margin-top:20px;font-size:12px;color:#55526a}
-          .footer a{color:#6c5ce7;text-decoration:none}
-          .toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(20px);background:#6c5ce7;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;opacity:0;transition:all .3s;pointer-events:none}
-          .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-          </style>
+          <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;display:flex;justify-content:center;padding:40px 16px}.card{max-width:560px;width:100%}.hero{background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:20px;padding:36px 28px;margin-bottom:16px;border:1px solid rgba(108,92,231,0.2)}h1{font-size:28px;color:#6c5ce7;margin-bottom:4px}.sub{color:#8a879a;font-size:14px;margin-bottom:24px}.repo-url{background:#0f0f1a;padding:14px 16px;border-radius:10px;font-family:monospace;font-size:13px;word-break:break-all;color:#b8aeff;border:1px solid rgba(108,92,231,0.15);margin-bottom:20px;cursor:pointer;position:relative}.copy-hint{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:11px;color:#55526a;font-family:sans-serif}.section{background:#12121a;border-radius:16px;padding:24px;margin-bottom:16px;border:1px solid rgba(255,255,255,0.05)}.section h2{font-size:16px;margin-bottom:16px}.steps{list-style:none;counter-reset:s}.steps li{counter-increment:s;padding:10px 0 10px 40px;position:relative;font-size:14px;line-height:1.6;color:#c0bdd0;border-bottom:1px solid rgba(255,255,255,0.04)}.steps li:last-child{border-bottom:none}.steps li::before{content:counter(s);position:absolute;left:0;top:10px;width:26px;height:26px;background:rgba(108,92,231,0.15);color:#6c5ce7;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}strong{color:#e8e6f0}.dl-btn{display:inline-block;background:#6c5ce7;color:#fff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;margin-top:8px}.footer{text-align:center;margin-top:20px;font-size:12px;color:#55526a}.footer a{color:#6c5ce7;text-decoration:none}.toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%) translateY(20px);background:#6c5ce7;color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;opacity:0;transition:all .3s;pointer-events:none}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}</style>
           </head>
           <body>
-          <div class="card">
-          <div class="hero">
-          <h1>StreamVault</h1>
-          <p class="sub">Personal F-Droid Repository</p>
-          <div class="repo-url" id="repo-url" onclick="copyUrl()"><span class="copy-hint">tap to copy</span></div>
-          <a class="dl-btn" href="fdroid/repo/StreamVault.apk">Download APK directly</a>
-          </div>
-          <div class="section">
-          <h2>Add this repo to F-Droid</h2>
-          <ol class="steps">
-          <li>Open the <strong>F-Droid</strong> app on your device</li>
-          <li>Go to <strong>Settings → Repositories</strong></li>
-          <li>Tap <strong>+</strong> to add a new repository</li>
-          <li>Paste the repo URL shown above</li>
-          <li>Tap <strong>Add</strong> and pull to refresh</li>
-          </ol>
-          </div>
-          <div class="footer"><a href="https://github.com/sidscri/StreamVault">View source on GitHub</a></div>
-          </div>
+          <div class="card"><div class="hero"><h1>StreamVault</h1><p class="sub">Personal F-Droid Repository</p><div class="repo-url" id="repo-url" onclick="copyUrl()"><span class="copy-hint">tap to copy</span></div><a class="dl-btn" href="fdroid/repo/StreamVault.apk">Download APK directly</a></div><div class="section"><h2>Add this repo to F-Droid</h2><ol class="steps"><li>Open the <strong>F-Droid</strong> app</li><li>Go to <strong>Settings → Repositories</strong></li><li>Tap <strong>+</strong> to add a new repository</li><li>Paste the repo URL shown above</li><li>Tap <strong>Add</strong> and pull to refresh</li></ol></div><div class="footer"><a href="https://github.com/sidscri/StreamVault">View source on GitHub</a></div></div>
           <div class="toast" id="toast">Copied!</div>
-          <script>
-          var u=window.location.href.replace(/\/$/,'')+'/fdroid/repo';
-          document.getElementById('repo-url').insertAdjacentText('afterbegin',u);
-          function copyUrl(){navigator.clipboard.writeText(u).then(function(){var t=document.getElementById('toast');t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)})}
-          </script>
-          </body>
-          </html>
+          <script>var u=window.location.href.replace(/\/$/,'')+'/fdroid/repo';document.getElementById('repo-url').insertAdjacentText('afterbegin',u);function copyUrl(){navigator.clipboard.writeText(u).then(function(){var t=document.getElementById('toast');t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2000)})}</script>
+          </body></html>
           HTMLEOF
-
-          echo "=== Final site ==="
-          find _site -type f
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
