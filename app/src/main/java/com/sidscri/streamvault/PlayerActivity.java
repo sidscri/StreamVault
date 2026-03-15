@@ -2,7 +2,6 @@ package com.sidscri.streamvault;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
@@ -36,7 +35,6 @@ import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
-import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
@@ -87,7 +85,6 @@ public class PlayerActivity extends Activity {
     private String lastSuccessUrl = null, savePath = null;
     private long playbackStartTime = 0, foTimeoutMs = 15000, recordingStartTime = 0;
     private boolean foAuto = true;
-    private int bufferSec = 30;
     private ConnectivityManager.NetworkCallback networkCallback;
     private Thread recordThread;
 
@@ -118,14 +115,6 @@ public class PlayerActivity extends Activity {
         hideOverlayRunnable = () -> setOverlayVisible(false);
         failoverTimeoutRunnable = () -> {};
         parseIntent();
-        // Load buffer setting
-        try {
-            SharedPreferences sp = getSharedPreferences("sv_prefs", MODE_PRIVATE);
-            String bs = sp.getString("bufferSec", "30");
-            bufferSec = Integer.parseInt(bs);
-            if (bufferSec < 5) bufferSec = 5;
-            if (bufferSec > 120) bufferSec = 120;
-        } catch (Exception e) { bufferSec = 30; }
         if (variants.isEmpty()) { finish(); return; }
         buildUI();
         registerNetworkCallback();
@@ -234,10 +223,7 @@ public class PlayerActivity extends Activity {
         titleText.setText(disp); statusText.setText("Src " + (idx + 1) + "/" + variants.size() + (locked ? " 🔒" : "")); strengthText.setText("");
         if (idx > 0) msg("Trying: " + disp);
         DataSource.Factory hf = new DefaultHttpDataSource.Factory().setUserAgent("StreamVault/4.2 ExoPlayer").setConnectTimeoutMs(12000).setReadTimeoutMs(12000).setAllowCrossProtocolRedirects(true);
-        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-            .setBufferDurationsMs(bufferSec * 1000, bufferSec * 2 * 1000, 2500, 5000).build();
-        player = new ExoPlayer.Builder(this).setLoadControl(loadControl).build();
-        playerView.setPlayer(player); playbackStartTime = System.currentTimeMillis();
+        player = new ExoPlayer.Builder(this).build(); playerView.setPlayer(player); playbackStartTime = System.currentTimeMillis();
         MediaSource hls = new HlsMediaSource.Factory(hf).setAllowChunklessPreparation(true).createMediaSource(MediaItem.fromUri(Uri.parse(v.url)));
         final boolean[] hlsFail = {false};
         player.addListener(new Player.Listener() {
@@ -307,6 +293,7 @@ public class PlayerActivity extends Activity {
         recordThread = new Thread(() -> {
             FileOutputStream fos = null;
             try {
+                // Determine save directory
                 File dir;
                 if (savePath != null && !savePath.isEmpty()) {
                     dir = new File(savePath);
@@ -318,7 +305,7 @@ public class PlayerActivity extends Activity {
                 fos = new FileOutputStream(outFile);
                 long totalBytes = 0;
 
-                // Read first chunk to determine if HLS or raw
+                // Always read first bytes to determine HLS vs raw stream
                 HttpURLConnection probe = (HttpURLConnection) new URL(streamUrl).openConnection();
                 probe.setRequestProperty("User-Agent", "StreamVault/4.2");
                 probe.setConnectTimeout(10000);
@@ -330,104 +317,115 @@ public class PlayerActivity extends Activity {
                 String peekStr = peekLen > 0 ? new String(peek, 0, peekLen) : "";
 
                 boolean isHLS = peekStr.contains("#EXTM3U") || peekStr.contains("#EXT-X-")
-                    || streamUrl.contains(".m3u8")
-                    || (probe.getContentType() != null && (probe.getContentType().contains("mpegurl") || probe.getContentType().contains("m3u")));
+                    || streamUrl.contains(".m3u8");
 
                 if (!isHLS) {
                     // Raw stream — pipe directly
                     if (peekLen > 0) { fos.write(peek, 0, peekLen); totalBytes += peekLen; }
-                    byte[] buf = new byte[16384]; int n;
-                    while (recording && (n = probeIn.read(buf)) != -1) { fos.write(buf, 0, n); totalBytes += n; }
-                    probeIn.close(); fos.close();
-                    final long fb = totalBytes;
-                    handler.post(() -> msg("⏹ " + outFile.getName() + " (" + (fb/1024) + " KB)"));
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while (recording && (n = probeIn.read(buf)) != -1) {
+                        fos.write(buf, 0, n);
+                        totalBytes += n;
+                    }
+                    probeIn.close();
+                    fos.close();
+                    final long finalBytes = totalBytes;
+                    handler.post(() -> msg("⏹ Saved: " + outFile.getName() + " (" + (finalBytes / 1024) + " KB)"));
                     return;
                 }
                 probeIn.close();
                 probe.disconnect();
 
-                // HLS: parse the playlist we already fetched to find segments
+                // HLS recording: download segments
+                Set<String> downloadedSegments = new HashSet<>();
                 String baseUrl = streamUrl.substring(0, streamUrl.lastIndexOf('/') + 1);
-                Set<String> done = new HashSet<>();
 
                 while (recording) {
                     try {
-                        // Re-fetch playlist each loop (live HLS updates)
-                        HttpURLConnection pc = (HttpURLConnection) new URL(streamUrl).openConnection();
-                        pc.setRequestProperty("User-Agent", "StreamVault/4.2");
-                        pc.setConnectTimeout(8000);
-                        pc.setInstanceFollowRedirects(true);
-                        BufferedReader br = new BufferedReader(new InputStreamReader(pc.getInputStream()));
-                        List<String> segs = new ArrayList<>();
-                        String mediaUrl = null;
+                        // Fetch the playlist
+                        HttpURLConnection m3uConn = (HttpURLConnection) new URL(streamUrl).openConnection();
+                        m3uConn.setRequestProperty("User-Agent", "StreamVault/4.2");
+                        m3uConn.setConnectTimeout(8000);
+                        m3uConn.setInstanceFollowRedirects(true);
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(m3uConn.getInputStream()));
+                        List<String> segmentUrls = new ArrayList<>();
                         String line;
-                        boolean nextIsSeg = false;
+                        String mediaPlaylistUrl = null;
 
-                        while ((line = br.readLine()) != null) {
+                        while ((line = reader.readLine()) != null) {
                             line = line.trim();
-                            if (line.startsWith("#EXTINF:")) { nextIsSeg = true; continue; }
-                            if (line.startsWith("#EXT-X-STREAM-INF")) { nextIsSeg = true; continue; }
-                            if (line.startsWith("#")) continue;
-                            if (line.isEmpty()) continue;
-
-                            String resolved = resolveUrl(baseUrl, line);
-                            if (line.contains(".m3u8") || line.contains(".m3u")) {
-                                mediaUrl = resolved; // Sub-playlist
-                            } else if (nextIsSeg || line.contains(".ts") || !line.contains(".m3u")) {
-                                segs.add(resolved);
+                            // Check if this is a master playlist (contains other playlists)
+                            if (line.endsWith(".m3u8") && !line.startsWith("#")) {
+                                mediaPlaylistUrl = resolveUrl(baseUrl, line);
                             }
-                            nextIsSeg = false;
-                        }
-                        br.close(); pc.disconnect();
-
-                        // Master playlist: fetch first media playlist
-                        if (segs.isEmpty() && mediaUrl != null) {
-                            String mBase = mediaUrl.substring(0, mediaUrl.lastIndexOf('/') + 1);
-                            HttpURLConnection mc = (HttpURLConnection) new URL(mediaUrl).openConnection();
-                            mc.setRequestProperty("User-Agent", "StreamVault/4.2");
-                            mc.setInstanceFollowRedirects(true);
-                            BufferedReader mr = new BufferedReader(new InputStreamReader(mc.getInputStream()));
-                            nextIsSeg = false;
-                            while ((line = mr.readLine()) != null) {
-                                line = line.trim();
-                                if (line.startsWith("#EXTINF:")) { nextIsSeg = true; continue; }
-                                if (line.startsWith("#")) continue;
-                                if (line.isEmpty()) continue;
-                                if (nextIsSeg || !line.contains(".m3u")) {
-                                    segs.add(resolveUrl(mBase, line));
+                            // Collect .ts segment URLs
+                            if (!line.startsWith("#") && (line.endsWith(".ts") || line.contains(".ts?") || line.contains("/seg") || (!line.startsWith("#") && !line.isEmpty() && !line.contains(".m3u")))) {
+                                if (!line.startsWith("#") && !line.isEmpty() && !line.endsWith(".m3u8")) {
+                                    segmentUrls.add(resolveUrl(baseUrl, line));
                                 }
-                                nextIsSeg = false;
                             }
-                            mr.close(); mc.disconnect();
+                        }
+                        reader.close();
+                        m3uConn.disconnect();
+
+                        // If master playlist, fetch the first media playlist
+                        if (segmentUrls.isEmpty() && mediaPlaylistUrl != null) {
+                            String mpBase = mediaPlaylistUrl.substring(0, mediaPlaylistUrl.lastIndexOf('/') + 1);
+                            HttpURLConnection mpConn = (HttpURLConnection) new URL(mediaPlaylistUrl).openConnection();
+                            mpConn.setRequestProperty("User-Agent", "StreamVault/4.2");
+                            BufferedReader mpReader = new BufferedReader(new InputStreamReader(mpConn.getInputStream()));
+                            while ((line = mpReader.readLine()) != null) {
+                                line = line.trim();
+                                if (!line.startsWith("#") && !line.isEmpty()) {
+                                    segmentUrls.add(resolveUrl(mpBase, line));
+                                }
+                            }
+                            mpReader.close();
+                            mpConn.disconnect();
                         }
 
                         // Download new segments
-                        for (String segUrl : segs) {
+                        for (String segUrl : segmentUrls) {
                             if (!recording) break;
-                            if (done.contains(segUrl)) continue;
-                            done.add(segUrl);
+                            if (downloadedSegments.contains(segUrl)) continue;
+                            downloadedSegments.add(segUrl);
+
                             try {
-                                HttpURLConnection sc = (HttpURLConnection) new URL(segUrl).openConnection();
-                                sc.setRequestProperty("User-Agent", "StreamVault/4.2");
-                                sc.setConnectTimeout(8000); sc.setReadTimeout(15000);
-                                sc.setInstanceFollowRedirects(true);
-                                InputStream si = sc.getInputStream();
-                                byte[] buf = new byte[16384]; int n;
-                                while (recording && (n = si.read(buf)) != -1) { fos.write(buf, 0, n); totalBytes += n; }
-                                si.close(); sc.disconnect();
-                            } catch (Exception se) { /* skip bad segment */ }
+                                HttpURLConnection segConn = (HttpURLConnection) new URL(segUrl).openConnection();
+                                segConn.setRequestProperty("User-Agent", "StreamVault/4.2");
+                                segConn.setConnectTimeout(8000);
+                                segConn.setReadTimeout(15000);
+                                InputStream segIn = segConn.getInputStream();
+                                byte[] buf = new byte[16384];
+                                int n;
+                                while (recording && (n = segIn.read(buf)) != -1) {
+                                    fos.write(buf, 0, n);
+                                    totalBytes += n;
+                                }
+                                segIn.close();
+                                segConn.disconnect();
+                            } catch (Exception segE) {
+                                // Skip bad segment, continue
+                            }
                         }
-                        if (recording) Thread.sleep(4000);
-                    } catch (Exception le) {
+
+                        // Wait before re-fetching playlist (HLS typically updates every 2-6 seconds)
                         if (recording) Thread.sleep(3000);
+
+                    } catch (Exception loopE) {
+                        if (recording) Thread.sleep(2000);
                     }
                 }
+
                 fos.close();
-                final long fb = totalBytes; final String fn = outFile.getName();
-                handler.post(() -> msg("⏹ " + fn + " (" + (fb > 1048576 ? fb/1048576+"MB" : fb/1024+"KB") + ")"));
+                final long finalBytes = totalBytes;
+                final String fileName = outFile.getName();
+                handler.post(() -> msg("⏹ Saved: " + fileName + " (" + (finalBytes / 1048576) + " MB)"));
+
             } catch (Exception e) {
                 if (fos != null) try { fos.close(); } catch (Exception x) {}
-                handler.post(() -> msg("Rec error: " + e.getMessage()));
+                handler.post(() -> msg("Record error: " + e.getMessage()));
             }
             handler.post(() -> { recording = false; recordingStartTime = 0; recordBtn.setColorFilter(Color.parseColor("#80ffffff")); recStatusText.setText(""); });
         });

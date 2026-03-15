@@ -4,7 +4,6 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -217,18 +216,6 @@ public class MainActivity extends Activity {
 
                 startActivity(intent);
             });
-        }
-
-        @JavascriptInterface
-        public void saveSetting(String key, String value) {
-            SharedPreferences sp = getSharedPreferences("sv_prefs", MODE_PRIVATE);
-            sp.edit().putString(key, value).apply();
-        }
-
-        @JavascriptInterface
-        public String getSetting(String key) {
-            SharedPreferences sp = getSharedPreferences("sv_prefs", MODE_PRIVATE);
-            return sp.getString(key, "");
         }
     }
 
