@@ -191,7 +191,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void playStream(String failoverJson, String title,
             String category, String nowNext,
-            String foTimeoutStr, String foAutoStr) {
+            String foTimeoutStr, String foAutoStr, String savePathStr) {
             runOnUiThread(() -> {
                 Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
                 intent.putExtra(PlayerActivity.EXTRA_FAILOVER_JSON,
@@ -209,6 +209,10 @@ public class MainActivity extends Activity {
 
                 boolean autoFo = !"false".equalsIgnoreCase(foAutoStr);
                 intent.putExtra(PlayerActivity.EXTRA_FO_AUTO, autoFo);
+
+                if (savePathStr != null && !savePathStr.isEmpty()) {
+                    intent.putExtra(PlayerActivity.EXTRA_SAVE_PATH, savePathStr);
+                }
 
                 startActivity(intent);
             });

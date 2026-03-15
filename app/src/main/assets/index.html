@@ -247,10 +247,29 @@ html,body{height:100%;width:100%;font-family:-apple-system,system-ui,sans-serif;
     <div class="sr"><div><div class="sl">Auto-failover</div><div class="sd">Try alternative streams on failure</div></div><div class="tgl on" id="s-fo-auto"></div></div>
   </div>
   <div class="ss"><h3>Recording</h3>
-    <p style="font-size:9px;color:var(--t2)">Tap ⏺ in player to record. Saves to Downloads.</p>
+    <div class="sr"><div><div class="sl">Save location</div><div class="sd">Path for recorded files</div></div><input id="s-save-path" placeholder="Downloads (default)" style="max-width:180px;font-size:9px"></div>
+    <p style="font-size:9px;color:var(--t2);margin-top:6px">Tap ⏺ in player to record. Shows elapsed time and file size. Properly records HLS video segments (not just the manifest).</p>
+  </div>
+  <div class="ss"><h3>Scheduled Recordings</h3>
+    <p style="font-size:9px;color:var(--t2);margin-bottom:6px">Auto-record channels at set times or when an EPG program airs. App must be open.</p>
+    <div id="sched-lst"></div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">
+      <select id="sc-ch" style="flex:1;min-width:100px;padding:5px;background:var(--c1);border:1px solid var(--bd);border-radius:var(--rs);color:var(--t1);font-size:9px"><option value="">Channel…</option></select>
+      <input id="sc-time" type="time" style="padding:5px;background:var(--c1);border:1px solid var(--bd);border-radius:var(--rs);color:var(--t1);font-size:9px">
+      <input id="sc-dur" type="number" placeholder="Min" min="1" max="480" style="width:50px;padding:5px;background:var(--c1);border:1px solid var(--bd);border-radius:var(--rs);color:var(--t1);font-size:9px">
+      <button id="sc-add" class="bs" style="padding:5px 10px;font-size:9px;border-radius:var(--rs)">Add</button>
+    </div>
+    <div style="margin-top:6px">
+      <label>Or match EPG title</label>
+      <div style="display:flex;gap:4px">
+        <select id="sc-ch2" style="flex:1;padding:5px;background:var(--c1);border:1px solid var(--bd);border-radius:var(--rs);color:var(--t1);font-size:9px"><option value="">Channel…</option></select>
+        <input id="sc-epg" placeholder="Show name…" style="flex:1;padding:5px;background:var(--c1);border:1px solid var(--bd);border-radius:var(--rs);color:var(--t1);font-size:9px">
+        <button id="sc-add2" class="bs" style="padding:5px 10px;font-size:9px;border-radius:var(--rs)">Add</button>
+      </div>
+    </div>
   </div>
   <div class="ss"><h3>About</h3>
-    <p style="font-size:9px;color:var(--t2)">StreamVault v4.1.0 (Build 11)<br>IPTV player with repos, failover, EPG, recording & locality priorities.</p>
+    <p style="font-size:9px;color:var(--t2)">StreamVault v4.2.0 (Build 15)<br>IPTV player with URL repos, failover, EPG guide, HLS recording, scheduled recording & locality priorities.</p>
   </div>
 </div>
 
@@ -406,7 +425,7 @@ let items = [];
 let repos = [];
 let epgSrc = [];
 let epgData = { channels: {}, programs: {} };
-let settings = { localities: [], startupChannel: '', foTimeout: 15, foAuto: true };
+let settings = { localities: [], startupChannel: '', foTimeout: 15, foAuto: true, savePath: '', schedules: [] };
 
 let editId = null;
 let delId = null;
@@ -454,7 +473,29 @@ function loadItems() {
     }
   } catch(e) { console.error('loadItems:', e); }
 }
-function saveRepos() { try { localStorage.setItem(KEYS.repos, JSON.stringify(repos)); } catch(e) {} }
+function saveRepos() {
+  try {
+    // For URL-based repos, don't save the streams array (too large for localStorage)
+    // They'll be re-fetched on demand. Only save streams for file-based repos.
+    const toSave = repos.map(r => {
+      if (r.sourceUrl) {
+        // URL-based: save metadata only, streams stay in memory
+        return { id: r.id, name: r.name, sourceUrl: r.sourceUrl, addedAt: r.addedAt, lastRefresh: r.lastRefresh, streamCount: (r.streams || []).length };
+      } else {
+        // File-based: save streams too (compact — only essential fields)
+        const compactStreams = (r.streams || []).map(s => ({
+          name: s.name, url: s.url, category: s.category || '', region: s.region || '',
+          icon: s.icon || '', epgTitle: s.epgTitle || '', tags: s.tags || []
+        }));
+        return { id: r.id, name: r.name, streams: compactStreams, addedAt: r.addedAt };
+      }
+    });
+    localStorage.setItem(KEYS.repos, JSON.stringify(toSave));
+  } catch(e) {
+    console.error('saveRepos failed (quota?):', e);
+    toast('Warning: Could not save repos — storage full. Use URL import for large playlists.');
+  }
+}
 function loadRepos() {
   try {
     let d = localStorage.getItem(KEYS.repos);
@@ -1248,7 +1289,7 @@ function renderRepos() {
 }
 
 // ═══ REPO BROWSER ═══
-window.openRepo = (id) => {
+window.openRepo = async (id) => {
   const r = repos.find(x => x.id === id);
   if (!r) return;
   brRepo = r;
@@ -1258,6 +1299,24 @@ window.openRepo = (id) => {
   $('br-title').textContent = r.name;
   $('br-q').value = '';
   showTab('br-scr');
+
+  // If URL-based repo with no streams in memory, fetch them
+  if (r.sourceUrl && (!r.streams || r.streams.length === 0)) {
+    $('br-lst').innerHTML = '<div class="emp"><h3>Loading…</h3><p>Fetching streams from ' + esc(r.sourceUrl).substring(0, 40) + '…</p></div>';
+    try {
+      const resp = await fetch(r.sourceUrl);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const text = await resp.text();
+      r.streams = parseM3U(text).filter(d => d.name && d.url);
+      if (!r.streams.length) throw new Error('No streams found');
+      toast(r.name + ': ' + r.streams.length + ' streams loaded');
+    } catch(e) {
+      $('br-lst').innerHTML = '<div class="emp"><h3>Failed to load</h3><p>' + esc(e.message) + '</p></div>';
+      toast('Failed: ' + e.message);
+      return;
+    }
+  }
+
   buildBrowseDropdowns();
   renderBrowse();
 };
@@ -1483,8 +1542,137 @@ function renderSettings() {
   tgl.className = 'tgl' + (settings.foAuto !== false ? ' on' : '');
   tgl.onclick = () => { settings.foAuto = !settings.foAuto; tgl.className = 'tgl' + (settings.foAuto ? ' on' : ''); saveSettings(); };
 
+  // Save path
+  $('s-save-path').value = settings.savePath || '';
+  $('s-save-path').onchange = (e) => { settings.savePath = e.target.value.trim(); saveSettings(); };
+
+  // Populate schedule channel dropdowns
+  const chOpts = '<option value="">Channel…</option>' + items.map(m => `<option value="${m.id}">${esc(m.title)}</option>`).join('');
+  $('sc-ch').innerHTML = chOpts;
+  $('sc-ch2').innerHTML = chOpts;
+
   // Localities
   renderLocalities();
+  // Schedules
+  renderSchedules();
+}
+
+function renderSchedules() {
+  const lst = $('sched-lst');
+  if (!settings.schedules || !settings.schedules.length) {
+    lst.innerHTML = '<p style="font-size:8px;color:var(--t3)">No scheduled recordings.</p>';
+    return;
+  }
+  lst.innerHTML = settings.schedules.map((s, i) => {
+    const ch = items.find(m => m.id === s.channelId);
+    const chName = ch ? ch.title : '(deleted)';
+    let desc;
+    if (s.type === 'time') {
+      desc = s.time + ' · ' + s.duration + 'min';
+    } else {
+      desc = 'EPG: "' + esc(s.epgTitle) + '"';
+    }
+    return `<div class="li" style="margin-bottom:3px">
+      <span class="ln" style="font-size:7px">⏺</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:500">${esc(chName)}</div>
+        <div style="font-size:8px;color:var(--t3)">${desc}${s.active ? ' · <span style="color:var(--gn)">Active</span>' : ''}</div>
+      </div>
+      <div class="lb2">
+        <button onclick="rmSched(${i})" style="color:var(--rd)">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Add time-based schedule
+$('sc-add').onclick = () => {
+  const chId = $('sc-ch').value;
+  const time = $('sc-time').value;
+  const dur = parseInt($('sc-dur').value);
+  if (!chId) { toast('Pick a channel'); return; }
+  if (!time) { toast('Set a time'); return; }
+  if (!dur || dur < 1) { toast('Set duration in minutes'); return; }
+  if (!settings.schedules) settings.schedules = [];
+  settings.schedules.push({ id: gid(), type: 'time', channelId: chId, time: time, duration: dur, active: false });
+  saveSettings();
+  renderSchedules();
+  toast('Schedule added');
+};
+
+// Add EPG-title-based schedule
+$('sc-add2').onclick = () => {
+  const chId = $('sc-ch2').value;
+  const epgTitle = $('sc-epg').value.trim();
+  if (!chId) { toast('Pick a channel'); return; }
+  if (!epgTitle) { toast('Enter a show name'); return; }
+  if (!settings.schedules) settings.schedules = [];
+  settings.schedules.push({ id: gid(), type: 'epg', channelId: chId, epgTitle: epgTitle, active: false });
+  saveSettings();
+  renderSchedules();
+  $('sc-epg').value = '';
+  toast('EPG schedule added');
+};
+
+window.rmSched = (i) => {
+  settings.schedules.splice(i, 1);
+  saveSettings();
+  renderSchedules();
+};
+
+// ─── Schedule Checker (runs every 30 seconds) ───
+setInterval(() => {
+  if (!settings.schedules || !settings.schedules.length) return;
+  const now = new Date();
+  const currentTime = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+
+  settings.schedules.forEach(sched => {
+    if (sched.active) return; // Already running
+
+    if (sched.type === 'time') {
+      // Check if current time matches schedule start (within 1 minute)
+      if (currentTime === sched.time) {
+        triggerScheduledRecording(sched);
+      }
+    } else if (sched.type === 'epg') {
+      // Check EPG for matching program starting now
+      const ch = items.find(m => m.id === sched.channelId);
+      if (ch && ch.epgTitle) {
+        const nn = getNowNext(ch.epgTitle);
+        if (nn.now && nn.now.title.toLowerCase().includes(sched.epgTitle.toLowerCase())) {
+          triggerScheduledRecording(sched, Math.max(5, Math.floor((nn.now.stop - Date.now()) / 60000)));
+        }
+      }
+    }
+  });
+}, 30000);
+
+function triggerScheduledRecording(sched, autoMinutes) {
+  const ch = items.find(m => m.id === sched.channelId);
+  if (!ch) return;
+  sched.active = true;
+  saveSettings();
+  renderSchedules();
+  const dur = autoMinutes || sched.duration || 60;
+  toast('⏺ Scheduled recording: ' + ch.title + ' for ' + dur + 'min');
+
+  // Start playback + tell native to record
+  const fl = buildFailoverList(ch);
+  const cat = [ch.category, ch.epgTitle].filter(Boolean).join(' · ');
+  let nn2 = '';
+  if (ch.epgTitle) { const e = getNowNext(ch.epgTitle); if (e.now) nn2 = 'REC: ' + e.now.title; }
+
+  if (window.NativePlayer && typeof window.NativePlayer.isAvailable === 'function' && window.NativePlayer.isAvailable()) {
+    window.NativePlayer.playStream(JSON.stringify(fl), ch.title || 'Stream', cat, nn2 || '', String(settings.foTimeout || 15), String(settings.foAuto !== false), settings.savePath || '');
+  }
+
+  // Auto-stop after duration
+  setTimeout(() => {
+    sched.active = false;
+    saveSettings();
+    renderSchedules();
+    toast('⏹ Scheduled recording complete: ' + ch.title);
+  }, dur * 60000);
 }
 
 function renderLocalities() {
@@ -1562,7 +1750,7 @@ window.playItem = (id) => {
       const foTimeout = String(settings.foTimeout || 15);
       const foAuto = String(settings.foAuto !== false);
       // SINGLE method call — all String params — NO overloading
-      window.NativePlayer.playStream(json, m.title || 'Stream', category, nowNext || '', foTimeout, foAuto);
+      window.NativePlayer.playStream(json, m.title || 'Stream', category, nowNext || '', foTimeout, foAuto, settings.savePath || '');
       return;
     }
 
