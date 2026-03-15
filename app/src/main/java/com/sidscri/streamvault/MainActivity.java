@@ -4,6 +4,7 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -191,7 +192,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void playStream(String failoverJson, String title,
             String category, String nowNext,
-            String foTimeoutStr, String foAutoStr) {
+            String foTimeoutStr, String foAutoStr, String savePathStr) {
             runOnUiThread(() -> {
                 Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
                 intent.putExtra(PlayerActivity.EXTRA_FAILOVER_JSON,
@@ -210,8 +211,24 @@ public class MainActivity extends Activity {
                 boolean autoFo = !"false".equalsIgnoreCase(foAutoStr);
                 intent.putExtra(PlayerActivity.EXTRA_FO_AUTO, autoFo);
 
+                if (savePathStr != null && !savePathStr.isEmpty()) {
+                    intent.putExtra(PlayerActivity.EXTRA_SAVE_PATH, savePathStr);
+                }
+
                 startActivity(intent);
             });
+        }
+
+        @JavascriptInterface
+        public void saveSetting(String key, String value) {
+            SharedPreferences sp = getSharedPreferences("sv_prefs", MODE_PRIVATE);
+            sp.edit().putString(key, value).apply();
+        }
+
+        @JavascriptInterface
+        public String getSetting(String key) {
+            SharedPreferences sp = getSharedPreferences("sv_prefs", MODE_PRIVATE);
+            return sp.getString(key, "");
         }
     }
 
