@@ -305,36 +305,42 @@ public class PlayerActivity extends Activity {
                 fos = new FileOutputStream(outFile);
                 long totalBytes = 0;
 
-                // Always read first bytes to determine HLS vs raw stream
+                // First, check if URL returns an HLS manifest or raw stream
                 HttpURLConnection probe = (HttpURLConnection) new URL(streamUrl).openConnection();
                 probe.setRequestProperty("User-Agent", "StreamVault/4.2");
                 probe.setConnectTimeout(10000);
                 probe.setReadTimeout(10000);
-                probe.setInstanceFollowRedirects(true);
-                InputStream probeIn = probe.getInputStream();
-                byte[] peek = new byte[4096];
-                int peekLen = probeIn.read(peek);
-                String peekStr = peekLen > 0 ? new String(peek, 0, peekLen) : "";
 
-                boolean isHLS = peekStr.contains("#EXTM3U") || peekStr.contains("#EXT-X-")
+                String contentType = probe.getContentType();
+                boolean isHLS = (contentType != null && (contentType.contains("mpegurl") || contentType.contains("m3u")))
                     || streamUrl.contains(".m3u8");
 
                 if (!isHLS) {
-                    // Raw stream — pipe directly
-                    if (peekLen > 0) { fos.write(peek, 0, peekLen); totalBytes += peekLen; }
-                    byte[] buf = new byte[16384];
-                    int n;
-                    while (recording && (n = probeIn.read(buf)) != -1) {
-                        fos.write(buf, 0, n);
-                        totalBytes += n;
+                    // Check first bytes
+                    InputStream probeIn = probe.getInputStream();
+                    byte[] peek = new byte[256];
+                    int peekLen = probeIn.read(peek);
+                    String peekStr = new String(peek, 0, Math.max(peekLen, 0));
+                    if (peekStr.contains("#EXTM3U") || peekStr.contains("#EXT-X-")) {
+                        isHLS = true;
+                    } else {
+                        // It's a raw stream — just download directly
+                        fos.write(peek, 0, peekLen);
+                        totalBytes += peekLen;
+                        byte[] buf = new byte[16384];
+                        int n;
+                        while (recording && (n = probeIn.read(buf)) != -1) {
+                            fos.write(buf, 0, n);
+                            totalBytes += n;
+                        }
+                        probeIn.close();
+                        fos.close();
+                        final long finalBytes = totalBytes;
+                        handler.post(() -> msg("⏹ Saved: " + outFile.getName() + " (" + (finalBytes / 1024) + " KB)"));
+                        return;
                     }
                     probeIn.close();
-                    fos.close();
-                    final long finalBytes = totalBytes;
-                    handler.post(() -> msg("⏹ Saved: " + outFile.getName() + " (" + (finalBytes / 1024) + " KB)"));
-                    return;
                 }
-                probeIn.close();
                 probe.disconnect();
 
                 // HLS recording: download segments
@@ -347,7 +353,6 @@ public class PlayerActivity extends Activity {
                         HttpURLConnection m3uConn = (HttpURLConnection) new URL(streamUrl).openConnection();
                         m3uConn.setRequestProperty("User-Agent", "StreamVault/4.2");
                         m3uConn.setConnectTimeout(8000);
-                        m3uConn.setInstanceFollowRedirects(true);
                         BufferedReader reader = new BufferedReader(new InputStreamReader(m3uConn.getInputStream()));
                         List<String> segmentUrls = new ArrayList<>();
                         String line;

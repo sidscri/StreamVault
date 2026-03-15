@@ -184,6 +184,18 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        @JavascriptInterface
+        public void saveSetting(String key, String value) {
+            try {
+                getSharedPreferences("streamvault", MODE_PRIVATE)
+                    .edit()
+                    .putString(key != null ? key : "", value != null ? value : "")
+                    .apply();
+            } catch (Exception e) {
+                // no-op to keep bridge safe
+            }
+        }
+
         /**
          * Single entry point for playback. ALL parameters are Strings
          * to avoid WebView type conversion issues.
