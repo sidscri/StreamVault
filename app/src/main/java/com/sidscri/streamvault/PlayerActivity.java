@@ -103,6 +103,7 @@ public class PlayerActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle b) {
+        try {
         super.onCreate(b);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -121,6 +122,10 @@ public class PlayerActivity extends Activity {
         startStrengthMonitor();
         playVariant(0);
         hideSystemUI();
+        } catch (Throwable t) {
+            Toast.makeText(this, "Player start failed: " + t.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+            finish();
+        }
     }
 
     private void parseIntent() {
@@ -128,6 +133,14 @@ public class PlayerActivity extends Activity {
         foAuto = getIntent().getBooleanExtra(EXTRA_FO_AUTO, true);
         savePath = getIntent().getStringExtra(EXTRA_SAVE_PATH);
         String json = getIntent().getStringExtra(EXTRA_FAILOVER_JSON);
+        if (json == null || json.isEmpty()) {
+            try {
+                json = getSharedPreferences("streamvault_runtime", MODE_PRIVATE)
+                    .getString("pending_failover_json", "[]");
+            } catch (Exception e) {
+                json = "[]";
+            }
+        }
         if (json != null && !json.isEmpty()) {
             try {
                 JSONArray arr = new JSONArray(json);

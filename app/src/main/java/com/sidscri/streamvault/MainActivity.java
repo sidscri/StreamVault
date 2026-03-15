@@ -4,6 +4,7 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -205,28 +206,37 @@ public class MainActivity extends Activity {
             String category, String nowNext,
             String foTimeoutStr, String foAutoStr, String savePathStr) {
             runOnUiThread(() -> {
-                Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
-                intent.putExtra(PlayerActivity.EXTRA_FAILOVER_JSON,
-                    failoverJson != null ? failoverJson : "[]");
-                intent.putExtra(PlayerActivity.EXTRA_TITLE,
-                    title != null ? title : "Stream");
-                intent.putExtra(PlayerActivity.EXTRA_CATEGORY,
-                    category != null ? category : "");
-                intent.putExtra(PlayerActivity.EXTRA_NOW_NEXT,
-                    nowNext != null ? nowNext : "");
+                try {
+                    Intent intent = new Intent(MainActivity.this, PlayerActivity.class);
 
-                int timeout = 15;
-                try { timeout = Integer.parseInt(foTimeoutStr); } catch (Exception e) {}
-                intent.putExtra(PlayerActivity.EXTRA_FO_TIMEOUT, timeout);
+                    String safeJson = failoverJson != null ? failoverJson : "[]";
+                    SharedPreferences runtimePrefs = getSharedPreferences("streamvault_runtime", MODE_PRIVATE);
+                    runtimePrefs.edit().putString("pending_failover_json", safeJson).apply();
+                    // Keep the Intent payload tiny to avoid TransactionTooLarge crashes.
+                    intent.putExtra(PlayerActivity.EXTRA_FAILOVER_JSON, "");
 
-                boolean autoFo = !"false".equalsIgnoreCase(foAutoStr);
-                intent.putExtra(PlayerActivity.EXTRA_FO_AUTO, autoFo);
+                    intent.putExtra(PlayerActivity.EXTRA_TITLE,
+                        title != null ? title : "Stream");
+                    intent.putExtra(PlayerActivity.EXTRA_CATEGORY,
+                        category != null ? category : "");
+                    intent.putExtra(PlayerActivity.EXTRA_NOW_NEXT,
+                        nowNext != null ? nowNext : "");
 
-                if (savePathStr != null && !savePathStr.isEmpty()) {
-                    intent.putExtra(PlayerActivity.EXTRA_SAVE_PATH, savePathStr);
+                    int timeout = 15;
+                    try { timeout = Integer.parseInt(foTimeoutStr); } catch (Exception e) {}
+                    intent.putExtra(PlayerActivity.EXTRA_FO_TIMEOUT, timeout);
+
+                    boolean autoFo = !"false".equalsIgnoreCase(foAutoStr);
+                    intent.putExtra(PlayerActivity.EXTRA_FO_AUTO, autoFo);
+
+                    if (savePathStr != null && !savePathStr.isEmpty()) {
+                        intent.putExtra(PlayerActivity.EXTRA_SAVE_PATH, savePathStr);
+                    }
+
+                    startActivity(intent);
+                } catch (Throwable t) {
+                    Toast.makeText(MainActivity.this, "Stream open failed: " + t.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
                 }
-
-                startActivity(intent);
             });
         }
     }
