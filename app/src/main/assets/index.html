@@ -248,7 +248,11 @@ html,body{height:100%;width:100%;font-family:-apple-system,system-ui,sans-serif;
   </div>
   <div class="ss"><h3>Recording</h3>
     <div class="sr"><div><div class="sl">Save location</div><div class="sd">Path for recorded files</div></div><input id="s-save-path" placeholder="Downloads (default)" style="max-width:180px;font-size:9px"></div>
-    <p style="font-size:9px;color:var(--t2);margin-top:6px">Tap ⏺ in player to record. Shows elapsed time and file size. Properly records HLS video segments (not just the manifest).</p>
+    <p style="font-size:9px;color:var(--t2);margin-top:6px">Tap ⏺ in player to record. Downloads actual HLS video segments.</p>
+  </div>
+  <div class="ss"><h3>Stream Buffering</h3>
+    <div class="sr"><div><div class="sl">Buffer size (seconds)</div><div class="sd">Higher = smoother but slower start. 15-60 recommended.</div></div><input type="number" id="s-buf" value="30" min="5" max="120" style="width:60px"></div>
+    <div class="sr"><div><div class="sl">Enable buffering</div><div class="sd">Pre-buffer stream data for smoother playback</div></div><div class="tgl on" id="s-buf-on"></div></div>
   </div>
   <div class="ss"><h3>Scheduled Recordings</h3>
     <p style="font-size:9px;color:var(--t2);margin-bottom:6px">Auto-record channels at set times or when an EPG program airs. App must be open.</p>
@@ -269,7 +273,7 @@ html,body{height:100%;width:100%;font-family:-apple-system,system-ui,sans-serif;
     </div>
   </div>
   <div class="ss"><h3>About</h3>
-    <p style="font-size:9px;color:var(--t2)">StreamVault v4.2.0 (Build 15)<br>IPTV player with URL repos, failover, EPG guide, HLS recording, scheduled recording & locality priorities.</p>
+    <p style="font-size:9px;color:var(--t2)">StreamVault v4.3.0 (Build 16)<br>IPTV player with URL repos, failover, EPG guide, HLS recording, scheduled recording, configurable buffer & locality priorities.</p>
   </div>
 </div>
 
@@ -425,7 +429,7 @@ let items = [];
 let repos = [];
 let epgSrc = [];
 let epgData = { channels: {}, programs: {} };
-let settings = { localities: [], startupChannel: '', foTimeout: 15, foAuto: true, savePath: '', schedules: [] };
+let settings = { localities: [], startupChannel: '', foTimeout: 15, foAuto: true, savePath: '', schedules: [], bufferSec: 30, bufferEnabled: true };
 
 let editId = null;
 let delId = null;
@@ -475,25 +479,23 @@ function loadItems() {
 }
 function saveRepos() {
   try {
-    // For URL-based repos, don't save the streams array (too large for localStorage)
-    // They'll be re-fetched on demand. Only save streams for file-based repos.
-    const toSave = repos.map(r => {
-      if (r.sourceUrl) {
-        // URL-based: save metadata only, streams stay in memory
-        return { id: r.id, name: r.name, sourceUrl: r.sourceUrl, addedAt: r.addedAt, lastRefresh: r.lastRefresh, streamCount: (r.streams || []).length };
-      } else {
-        // File-based: save streams too (compact — only essential fields)
-        const compactStreams = (r.streams || []).map(s => ({
-          name: s.name, url: s.url, category: s.category || '', region: s.region || '',
-          icon: s.icon || '', epgTitle: s.epgTitle || '', tags: s.tags || []
-        }));
-        return { id: r.id, name: r.name, streams: compactStreams, addedAt: r.addedAt };
-      }
-    });
-    localStorage.setItem(KEYS.repos, JSON.stringify(toSave));
+    // Try saving everything first
+    const full = JSON.stringify(repos);
+    localStorage.setItem(KEYS.repos, full);
   } catch(e) {
-    console.error('saveRepos failed (quota?):', e);
-    toast('Warning: Could not save repos — storage full. Use URL import for large playlists.');
+    // Storage full — save metadata only for URL-based repos
+    console.warn('saveRepos full save failed, trying compact:', e);
+    try {
+      const compact = repos.map(r => {
+        if (r.sourceUrl) return { id: r.id, name: r.name, sourceUrl: r.sourceUrl, addedAt: r.addedAt, streamCount: (r.streams||[]).length, streams: [] };
+        // For file repos, try keeping streams but stripped down
+        return { id: r.id, name: r.name, streams: (r.streams||[]).slice(0, 2000).map(s => ({ name: s.name, url: s.url, category: s.category||'', region: s.region||'' })), addedAt: r.addedAt };
+      });
+      localStorage.setItem(KEYS.repos, JSON.stringify(compact));
+    } catch(e2) {
+      console.error('saveRepos compact also failed:', e2);
+      toast('Storage full — large repos need URL import');
+    }
   }
 }
 function loadRepos() {
@@ -1542,9 +1544,31 @@ function renderSettings() {
   tgl.className = 'tgl' + (settings.foAuto !== false ? ' on' : '');
   tgl.onclick = () => { settings.foAuto = !settings.foAuto; tgl.className = 'tgl' + (settings.foAuto ? ' on' : ''); saveSettings(); };
 
-  // Save path
+  // Save path — stored in native SharedPreferences via bridge
   $('s-save-path').value = settings.savePath || '';
-  $('s-save-path').onchange = (e) => { settings.savePath = e.target.value.trim(); saveSettings(); };
+  $('s-save-path').onchange = (e) => {
+    settings.savePath = e.target.value.trim();
+    saveSettings();
+    if (window.NativePlayer && window.NativePlayer.saveSetting) window.NativePlayer.saveSetting('savePath', settings.savePath);
+  };
+
+  // Buffer size
+  $('s-buf').value = settings.bufferSec || 30;
+  $('s-buf').onchange = (e) => {
+    settings.bufferSec = Math.max(5, Math.min(120, parseInt(e.target.value) || 30));
+    saveSettings();
+    if (window.NativePlayer && window.NativePlayer.saveSetting) window.NativePlayer.saveSetting('bufferSec', String(settings.bufferSec));
+  };
+
+  // Buffer toggle
+  const bufTgl = $('s-buf-on');
+  bufTgl.className = 'tgl' + (settings.bufferEnabled !== false ? ' on' : '');
+  bufTgl.onclick = () => {
+    settings.bufferEnabled = !settings.bufferEnabled;
+    bufTgl.className = 'tgl' + (settings.bufferEnabled ? ' on' : '');
+    saveSettings();
+    if (window.NativePlayer && window.NativePlayer.saveSetting) window.NativePlayer.saveSetting('bufferSec', settings.bufferEnabled ? String(settings.bufferSec || 30) : '5');
+  };
 
   // Populate schedule channel dropdowns
   const chOpts = '<option value="">Channel…</option>' + items.map(m => `<option value="${m.id}">${esc(m.title)}</option>`).join('');
@@ -1663,7 +1687,7 @@ function triggerScheduledRecording(sched, autoMinutes) {
   if (ch.epgTitle) { const e = getNowNext(ch.epgTitle); if (e.now) nn2 = 'REC: ' + e.now.title; }
 
   if (window.NativePlayer && typeof window.NativePlayer.isAvailable === 'function' && window.NativePlayer.isAvailable()) {
-    window.NativePlayer.playStream(JSON.stringify(fl), ch.title || 'Stream', cat, nn2 || '', String(settings.foTimeout || 15), String(settings.foAuto !== false), settings.savePath || '');
+    window.NativePlayer.playStream(JSON.stringify(fl), ch.title || 'Stream', cat, nn2 || '', String(settings.foTimeout || 15), String(settings.foAuto !== false));
   }
 
   // Auto-stop after duration
@@ -1750,7 +1774,7 @@ window.playItem = (id) => {
       const foTimeout = String(settings.foTimeout || 15);
       const foAuto = String(settings.foAuto !== false);
       // SINGLE method call — all String params — NO overloading
-      window.NativePlayer.playStream(json, m.title || 'Stream', category, nowNext || '', foTimeout, foAuto, settings.savePath || '');
+      window.NativePlayer.playStream(json, m.title || 'Stream', category, nowNext || '', foTimeout, foAuto);
       return;
     }
 
