@@ -36,9 +36,9 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.exoplayer.hls.HlsMediaSource;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
-import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.ui.PlayerView;
 
 import org.json.JSONArray;
@@ -123,7 +123,7 @@ public class PlayerActivity extends Activity {
         playVariant(0);
         hideSystemUI();
         } catch (Throwable t) {
-            Toast.makeText(this, "Player start failed: " + t.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Player start failed: " + t.getClass().getSimpleName() + (t.getMessage() != null ? " - " + t.getMessage() : ""), Toast.LENGTH_LONG).show();
             finish();
         }
     }
@@ -146,7 +146,8 @@ public class PlayerActivity extends Activity {
                 JSONArray arr = new JSONArray(json);
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.getJSONObject(i);
-                    variants.add(new Variant(o.optString("url",""), o.optString("title",""), o.optString("region",""), o.optString("tag","")));
+                    String normalized = normalizeUrl(o.optString("url", ""));
+                    if (!normalized.isEmpty()) variants.add(new Variant(normalized, o.optString("title",""), o.optString("region",""), o.optString("tag","")));
                 }
             } catch (Exception e) {}
         }
@@ -154,7 +155,8 @@ public class PlayerActivity extends Activity {
             String u = getIntent().getStringExtra(EXTRA_URL);
             if (u != null && !u.isEmpty()) {
                 String t = getIntent().getStringExtra(EXTRA_TITLE);
-                variants.add(new Variant(u, t != null ? t : "Stream", "", ""));
+                String normalized = normalizeUrl(u);
+                if (!normalized.isEmpty()) variants.add(new Variant(normalized, t != null ? t : "Stream", "", ""));
             }
         }
     }
@@ -225,33 +227,107 @@ public class PlayerActivity extends Activity {
     }
 
     // ─── Playback ───
+    private String normalizeUrl(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        if (s.isEmpty()) return "";
+        s = s.replace("&amp;", "&");
+        if (s.endsWith("@top")) s = s.substring(0, s.length() - 4);
+        try {
+            Uri parsed = Uri.parse(s);
+            String host = parsed.getHost();
+            if (host != null && host.contains("webplayer.online")) {
+                String inner = parsed.getQueryParameter("url");
+                if (inner != null && !inner.trim().isEmpty()) s = inner.trim();
+            }
+        } catch (Exception ignored) {}
+        return s;
+    }
+
+    private boolean isSupportedUrl(String raw) {
+        try {
+            Uri uri = Uri.parse(normalizeUrl(raw));
+            String scheme = uri.getScheme();
+            return scheme != null && (
+                "http".equalsIgnoreCase(scheme) ||
+                "https".equalsIgnoreCase(scheme) ||
+                "file".equalsIgnoreCase(scheme) ||
+                "content".equalsIgnoreCase(scheme) ||
+                "rtsp".equalsIgnoreCase(scheme)
+            );
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private MediaSource buildMediaSource(DefaultHttpDataSource.Factory hf, String rawUrl) {
+        String url = normalizeUrl(rawUrl);
+        Uri uri = Uri.parse(url);
+        MediaItem.Builder item = new MediaItem.Builder().setUri(uri);
+        String lower = url.toLowerCase(Locale.US);
+        if (lower.contains(".m3u8") || lower.contains("format=m3u8") || lower.contains("type=hls")) {
+            item.setMimeType(MimeTypes.APPLICATION_M3U8);
+        }
+        return new DefaultMediaSourceFactory(hf).createMediaSource(item.build());
+    }
+
     private void playVariant(int idx) {
         if (idx < 0 || idx >= variants.size()) {
             if (lastSuccessUrl != null) { msg("Retrying last working"); for (int i = 0; i < variants.size(); i++) if (lastSuccessUrl.equals(variants.get(i).url)) { playVariant(i); return; } }
-            loadingView.setVisibility(View.GONE); errorContainer.setVisibility(View.VISIBLE); errorText.setText("All " + variants.size() + " failed"); return;
+            showFail(); return;
         }
-        currentIdx = idx; Variant v = variants.get(idx); releasePlayer();
-        loadingView.setVisibility(View.VISIBLE); errorContainer.setVisibility(View.GONE);
-        String disp = v.title.isEmpty() ? "Source " + (idx + 1) : v.title; if (!v.tag.isEmpty()) disp += " (" + v.tag + ")";
-        titleText.setText(disp); statusText.setText("Src " + (idx + 1) + "/" + variants.size() + (locked ? " 🔒" : "")); strengthText.setText("");
-        if (idx > 0) msg("Trying: " + disp);
-        DataSource.Factory hf = new DefaultHttpDataSource.Factory().setUserAgent("StreamVault/4.2 ExoPlayer").setConnectTimeoutMs(12000).setReadTimeoutMs(12000).setAllowCrossProtocolRedirects(true);
+        currentIdx = idx; Variant v = variants.get(idx);
+        String normalizedUrl = normalizeUrl(v.url);
+        if (!isSupportedUrl(normalizedUrl)) {
+            if (!locked && foAuto) { tryNext(); return; }
+            loadingView.setVisibility(View.GONE);
+            errorContainer.setVisibility(View.VISIBLE);
+            errorText.setText("Bad stream URL");
+            msg("Unsupported stream URL");
+            return;
+        }
+        titleText.setText(v.title.isEmpty() ? "Stream" : v.title);
+        String meta = "Variant " + (idx + 1) + "/" + variants.size(); if (!v.region.isEmpty()) meta += " · " + v.region; if (!v.tag.isEmpty()) meta += " · " + v.tag; statusText.setText(meta);
+        loadingView.setVisibility(View.VISIBLE); errorContainer.setVisibility(View.GONE); cancelFT(); releasePlayer();
+        DefaultHttpDataSource.Factory hf = new DefaultHttpDataSource.Factory().setUserAgent("StreamVault/4.3 ExoPlayer").setConnectTimeoutMs(12000).setReadTimeoutMs(12000).setAllowCrossProtocolRedirects(true);
         player = new ExoPlayer.Builder(this).build(); playerView.setPlayer(player); playbackStartTime = System.currentTimeMillis();
-        MediaSource hls = new HlsMediaSource.Factory(hf).setAllowChunklessPreparation(true).createMediaSource(MediaItem.fromUri(Uri.parse(v.url)));
-        final boolean[] hlsFail = {false};
+        final boolean[] retried = {false};
         player.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
-                if (state == Player.STATE_READY) { loadingView.setVisibility(View.GONE); errorContainer.setVisibility(View.GONE); lastSuccessUrl = v.url; cancelFT(); }
+                if (state == Player.STATE_READY) { loadingView.setVisibility(View.GONE); errorContainer.setVisibility(View.GONE); lastSuccessUrl = normalizedUrl; cancelFT(); }
                 else if (state == Player.STATE_BUFFERING) { loadingView.setVisibility(View.VISIBLE); if (!locked && foAuto) startFT(); }
             }
             @Override public void onPlayerError(PlaybackException error) {
                 cancelFT();
-                if (!hlsFail[0]) { hlsFail[0] = true; try { player.stop(); player.setMediaSource(new ProgressiveMediaSource.Factory(hf).createMediaSource(MediaItem.fromUri(Uri.parse(v.url)))); player.prepare(); player.setPlayWhenReady(true); } catch (Exception ex) { tryNext(); } return; }
+                if (!retried[0]) {
+                    retried[0] = true;
+                    try {
+                        player.stop();
+                        MediaItem.Builder item = new MediaItem.Builder().setUri(Uri.parse(normalizedUrl)).setMimeType(MimeTypes.APPLICATION_M3U8);
+                        player.setMediaSource(new DefaultMediaSourceFactory(hf).createMediaSource(item.build()));
+                        player.prepare();
+                        player.setPlayWhenReady(true);
+                        return;
+                    } catch (Exception ex) {
+                        // fall through to failover
+                    }
+                }
                 if (!locked && foAuto && networkAvailable) tryNext(); else if (!networkAvailable) { msg("Network lost"); loadingView.setVisibility(View.VISIBLE); }
                 else { loadingView.setVisibility(View.GONE); errorContainer.setVisibility(View.VISIBLE); errorText.setText("Failed"); }
             }
         });
-        player.setMediaSource(hls); player.setPlayWhenReady(true); player.prepare(); showBrief();
+        try {
+            player.setMediaSource(buildMediaSource(hf, normalizedUrl));
+            player.setPlayWhenReady(true);
+            player.prepare();
+            showBrief();
+        } catch (IllegalArgumentException iae) {
+            if (!locked && foAuto) { tryNext(); return; }
+            loadingView.setVisibility(View.GONE);
+            errorContainer.setVisibility(View.VISIBLE);
+            errorText.setText("Bad stream URL");
+            msg("Player input rejected");
+        }
     }
 
     private void tryNext() { if (locked) return; if (currentIdx + 1 < variants.size()) playVariant(currentIdx + 1); else if (lastSuccessUrl != null) { for (int i = 0; i < variants.size(); i++) if (lastSuccessUrl.equals(variants.get(i).url)) { playVariant(i); return; } showFail(); } else showFail(); }
